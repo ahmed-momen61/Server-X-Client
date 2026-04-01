@@ -5,12 +5,11 @@
 #include <cstring>
 #include <string>
 
-void cipherData(char* data, int dataLen, const std::string& key) {
-    int keyLen = key.length();
-    for (int i = 0; i < dataLen; i++) {
-        data[i] = data[i] ^ key[i % keyLen];
-    }
-}
+const std::string RESET = "\033[0m";
+const std::string GREEN = "\033[32m";
+const std::string RED = "\033[31m";
+const std::string CYAN = "\033[36m";
+const std::string YELLOW = "\033[33m";
 
 int main() {
     const int targetPort = 8080;
@@ -21,46 +20,63 @@ int main() {
     targetServerConfig.sin_port = htons(targetPort);
     inet_pton(AF_INET, "127.0.0.1", &targetServerConfig.sin_addr);
 
-    connect(myClientSocket, (struct sockaddr*)&targetServerConfig, sizeof(targetServerConfig));
+    if (connect(myClientSocket, (struct sockaddr*)&targetServerConfig, sizeof(targetServerConfig)) < 0) {
+        std::cout << RED << "Connection Failed. Is the server running?" << RESET << std::endl;
+        return 1;
+    }
 
-    std::string userPsk;
-    std::cout << "Server Password: ";
-    std::cin >> userPsk;
-    send(myClientSocket, userPsk.c_str(), userPsk.length(), 0);
+    std::cout << CYAN << "--- Welcome to Bayezid Secure Access ---" << RESET << "\n";
+    
+    std::string username, password;
+    std::cout << "Username: ";
+    std::getline(std::cin, username);
+    std::cout << "Password: ";
+    std::getline(std::cin, password);
+
+    std::string credentials = username + ":" + password;
+    send(myClientSocket, credentials.c_str(), credentials.length(), 0);
 
     char serverMessage[1024] = {0};
-    read(myClientSocket, serverMessage, 1024);
-    std::cout << serverMessage << std::endl;
+    int bytesRead = read(myClientSocket, serverMessage, sizeof(serverMessage));
 
-    if (strcmp(serverMessage, "Authenticated Successfully") == 0) {
-        char choice;
-        std::cout << "Do you want to secure the package (y/n): ";
-        std::cin >> choice;
-        send(myClientSocket, &choice, 1, 0);
-
-        std::cin.ignore();
+    if (bytesRead > 0) {
+        std::string response(serverMessage);
         
-        std::string msg;
-        std::cout << "Enter ur message: ";
-        std::getline(std::cin, msg);
+        if (response.find("Auth_Success:") == 0) {
+            std::string role = response.substr(13); 
+            std::cout << GREEN << "\n[+] Authenticated Successfully!" << RESET << "\n";
+            std::cout << YELLOW << "Current Role: " << role << RESET << "\n\n";
+            std::cout << "Type 'exit' to disconnect. Try commands like 'ls', 'cat file', 'cp file', 'rm file'.\n";
 
-        char dataBuffer[1024] = {0};
-        strcpy(dataBuffer, msg.c_str());
-        int dataLength = msg.length();
+            while (true) {
+                std::cout << CYAN << "Bayezid-Shell (" << role << ")> " << RESET;
+                std::string cmd;
+                std::getline(std::cin, cmd);
 
-        if (choice == 'y') {
-            std::string cryptoKey;
-            std::cout << "The encryption key pls: ";
-            std::cin >> cryptoKey;
-            
-            cipherData(dataBuffer, dataLength, cryptoKey);
-            send(myClientSocket, dataBuffer, dataLength, 0);
+                if (cmd.empty()) continue;
+
+                send(myClientSocket, cmd.c_str(), cmd.length(), 0);
+
+                if (cmd == "exit") {
+                    std::cout << "Disconnecting...\n";
+                    break;
+                }
+
+                char responseBuffer[2048] = {0};
+                int respBytes = read(myClientSocket, responseBuffer, sizeof(responseBuffer));
+                
+                if (respBytes <= 0) {
+                    std::cout << RED << "\n[!] Connection closed by server (Timeout or Kicked)." << RESET << "\n";
+                    break;
+                }
+
+                std::cout << responseBuffer << "\n";
+            }
         } else {
-            send(myClientSocket, dataBuffer, dataLength, 0);
+            std::cout << RED << "\n[-] " << response << RESET << "\n";
         }
     }
 
     close(myClientSocket);
-    
     return 0;
 }

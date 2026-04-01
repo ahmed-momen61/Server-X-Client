@@ -1,25 +1,32 @@
-# Server-X-Cient (Milestone 1)
+# Bayezid Secure Server (Server-X-Client Milestones 1-3)
 
 ## Overview
-This project implements a secure, foundational TCP client-server communication system written in native C/C++ for Linux environments. It demonstrates fundamental network programming concepts along with a custom security module that ensures stable, authenticated, and encrypted data transmission.
+This project implements a highly secure, multi-threaded TCP client-server communication system written in native C/C++ for Linux environments. Originally starting as a basic connection module, it has evolved into a robust architecture demonstrating advanced network programming, cryptography, Role-Based Access Control (RBAC), and active defense mechanisms against common cyber threats.
 
-## Features
-* **TCP Socket Programming:** Reliable connection between a single client and server.
-* **Pre-Shared Key (PSK) Authentication:** The server enforces a strict handshake protocol. Clients must authenticate with a valid password before any data exchange occurs.
-* **Interactive CLI:** A dynamic command-line interface that prompts users for credentials, encryption preferences, keys, and messages at runtime.
-* **Symmetric Encryption Layer:** Implements a custom XOR cipher. The user can optionally encrypt the payload with a secret key on the client side, which the server will then require to decrypt the received message.
+## Advanced Features
+* **Multi-threaded Architecture:** Utilizes `pthread` to handle multiple concurrent client connections without blocking the main server execution.
+* **Cryptographic Authentication (SHA-256):** Passwords are no longer stored in plaintext. The server validates credentials against SHA-256 hashes using the OpenSSL library.
+* **Role-Based Access Control (RBAC):** Users are assigned specific access levels (Top, Medium, Entry) upon login, dynamically restricting their ability to execute commands (e.g., read, edit, delete).
+* **Audit Logging:** Comprehensive tracking of all server events, authentications, executed commands, and security alerts, stored persistently in `server.log`.
+* **Brute-Force Protection:** Automatically tracks failed login attempts and temporarily blocks the offending IP address after 3 consecutive failures.
+* **Active Defense (Honeypot):** Deploys simulated restricted files (e.g., `passwords_backup.txt`). Unauthorized access attempts immediately trigger a critical alert, log the event, and kick the attacker off the server.
+* **Graceful Shutdown:** Safely handles termination signals (like `Ctrl+C`), closes open sockets properly, and utilizes `SO_REUSEADDR` to prevent "Address already in use" errors upon restart.
+* **Interactive Colored CLI:** A dynamic, terminal-based shell experience ("Bayezid-Shell") with color-coded feedback for success, warnings, and errors.
 
 ## Prerequisites
-* A Linux-based environment (e.g., Ubuntu).
+* A Linux-based environment (e.g., Ubuntu, Kali Linux).
 * GCC Compiler (`g++`).
+* OpenSSL Development Libraries.
+  * *To install on Debian/Ubuntu:* `sudo apt-get install libssl-dev`
 
-## Build Instructions
-Open your terminal and compile the source files using `g++` then Run the Server --> Client {password:- mo2needs2sleep}:
+## Initial Setup
+Before running the server, you must create a `users.txt` file in the same directory as the server executable. This file acts as your database. 
 
-```bash
-g++ server.cpp -o server
-g++ client.cpp -o client
-./server
-./client
-*password*
-make ur choices
+**Format:** `username hashedPassword role`
+
+**Example `users.txt`:**
+(Note: The hash below is for the password `mo2needs2sleep`)
+```text
+admin 744c8030bb4b791dc0c67efbc6e7cb359b3af3a8ed9c1488c036d0f5c1d1a63b Top
+ahmed 744c8030bb4b791dc0c67efbc6e7cb359b3af3a8ed9c1488c036d0f5c1d1a63b Medium
+guest 744c8030bb4b791dc0c67efbc6e7cb359b3af3a8ed9c1488c036d0f5c1d1a63b Entry
