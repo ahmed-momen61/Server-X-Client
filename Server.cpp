@@ -9,177 +9,85 @@
 #include <pthread.h>
 #include <map>
 #include <mutex>
-
 #include "Logger.h"
 #include "Security.h"
 #include "CommandHandler.h"
 
 std::atomic<bool> serverRunning(true);
 int myServerFd;
-
+std::map<std::string, int> onlineUsers;
+std::mutex userMutex;
 std::mutex ipMutex;
-
 std::map<std::string, int> failedAttempts;
 std::map<std::string, std::chrono::time_point<std::chrono::system_clock>> blockedIPs;
-const int MAX_ATTEMPTS = 3;
-const int BLOCK_DURATION_MINUTES = 5;
 
-struct ClientInfo {
-    int socket;
-    struct sockaddr_in address;
-};
+struct ClientInfo { int socket; struct sockaddr_in address; };
 
 void* handleClient(void* arg) {
     pthread_detach(pthread_self());
     ClientInfo* client = (ClientInfo*)arg;
     int clientSocket = client->socket;
     std::string clientIP = inet_ntoa(client->address.sin_addr);
-    
-    struct timeval timeout;
-    timeout.tv_sec = 300; 
-    timeout.tv_usec = 0;
-    setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
+    char buffer[4096];
 
+    // Brute-force check
     {
         std::lock_guard<std::mutex> lock(ipMutex);
-        if (blockedIPs.find(clientIP) != blockedIPs.end()) {
-            auto now = std::chrono::system_clock::now();
-            if (now < blockedIPs[clientIP]) {
-                logEvent("Blocked IP attempted connection: " + clientIP, "WARNING");
-                const char* blockMsg = "IP is temporarily blocked due to multiple failed attempts.";
-                send(clientSocket, blockMsg, strlen(blockMsg), 0);
-                close(clientSocket);
-                delete client;
-                return nullptr;
-            } else {
-                blockedIPs.erase(clientIP); 
-                failedAttempts[clientIP] = 0;
-            }
+        if (blockedIPs.count(clientIP) && std::chrono::system_clock::now() < blockedIPs[clientIP]) {
+            send(clientSocket, "IP_BLOCKED", 10, 0); close(clientSocket); delete client; return nullptr;
         }
     }
 
-    logEvent("New connection handling started for IP: " + clientIP, "INFO");
+    int bytes = read(clientSocket, buffer, 4096);
+    if (bytes > 0) {
+        std::string creds(buffer); size_t colon = creds.find(':');
+        if (colon != std::string::npos) {
+            std::string user = creds.substr(0, colon), pass = creds.substr(colon+1), role;
+            if (authenticateUser(user, pass, role)) {
+                { std::lock_guard<std::mutex> lock(userMutex); onlineUsers[user] = clientSocket; }
+                logEvent("User [" + user + "] authenticated. Role: " + role, "SUCCESS");
+                std::string success = encryptAES("Auth_Success:" + role);
+                send(clientSocket, success.c_str(), success.length(), 0);
 
-    char buffer[1024] = {0};
-    int bytesRead = read(clientSocket, buffer, sizeof(buffer));
-    
-    if (bytesRead > 0) {
-        std::string credentials(buffer);
-        size_t colonPos = credentials.find(':');
-        
-        if (colonPos != std::string::npos) {
-            std::string username = credentials.substr(0, colonPos);
-            std::string password = credentials.substr(colonPos + 1);
-            std::string userRole = "";
-
-            if (authenticateUser(username, password, userRole)) {
-                logEvent("User [" + username + "] authenticated successfully. Role: " + userRole, "SUCCESS");
-                
-                {
-                    std::lock_guard<std::mutex> lock(ipMutex);
-                    failedAttempts[clientIP] = 0;
-                }
-
-                std::string successMsg = "Auth_Success:" + userRole;
-                send(clientSocket, successMsg.c_str(), successMsg.length(), 0);
-                
                 while (true) {
-                    memset(buffer, 0, sizeof(buffer));
-                    int cmdBytes = read(clientSocket, buffer, sizeof(buffer));
-                    
-                    if (cmdBytes <= 0) {
-                        logEvent("Client " + username + " disconnected or timed out.", "INFO");
-                        break;
-                    }
-
-                    std::string cmd(buffer);
+                    memset(buffer, 0, 4096);
+                    int cmdBytes = read(clientSocket, buffer, 4096);
+                    if (cmdBytes <= 0) break;
+                    std::string cmd = decryptAES(std::string(buffer));
                     if (cmd == "exit") break;
-
-                    logEvent("User [" + username + "] executed: " + cmd, "INFO");
-                    
-                    std::string response = evaluateCommand(cmd, userRole, clientIP);
-                    
-                    if (response == "HONEYPOT_TRIGGER") {
-                        const char* alert = "\n\033[31m[!] SECURITY ALERT: Unauthorized access attempt detected. Disconnecting...\033[0m\n";
-                        send(clientSocket, alert, strlen(alert), 0);
-                        break; 
+                    logEvent("User [" + user + "] executed: " + cmd);
+                    std::string resp = evaluateCommand(cmd, role, clientIP, user);
+                    if (resp == "HONEYPOT_TRIGGER") {
+                        send(clientSocket, encryptAES("HONEYPOT_TRIGGER").c_str(), 64, 0); break;
                     }
-
-                    send(clientSocket, response.c_str(), response.length(), 0);
+                    std::string encResp = encryptAES(resp);
+                    send(clientSocket, encResp.c_str(), encResp.length(), 0);
                 }
-
+                { std::lock_guard<std::mutex> lock(userMutex); onlineUsers.erase(user); }
             } else {
                 std::lock_guard<std::mutex> lock(ipMutex);
-                failedAttempts[clientIP]++;
-                logEvent("Failed login attempt from IP: " + clientIP + " for user: " + username + " (Attempt " + std::to_string(failedAttempts[clientIP]) + ")", "WARNING");
-                
-                if (failedAttempts[clientIP] >= MAX_ATTEMPTS) {
-                    blockedIPs[clientIP] = std::chrono::system_clock::now() + std::chrono::minutes(BLOCK_DURATION_MINUTES);
-                    logEvent("IP " + clientIP + " BLOCKED for " + std::to_string(BLOCK_DURATION_MINUTES) + " minutes.", "CRITICAL");
-                }
-
-                const char* failMsg = "Authentication Failed.";
-                send(clientSocket, failMsg, strlen(failMsg), 0);
+                if (++failedAttempts[clientIP] >= 3) blockedIPs[clientIP] = std::chrono::system_clock::now() + std::chrono::minutes(5);
+                send(clientSocket, "AUTH_FAILED", 11, 0);
             }
         }
     }
-
-    close(clientSocket);
-    delete client;
-    return nullptr;
-}
-
-void handleShutdownSignal(int signum) {
-    logEvent("Shutdown signal (" + std::to_string(signum) + ") received. Initiating graceful shutdown...", "WARNING");
-    serverRunning = false;
-    close(myServerFd);
+    close(clientSocket); delete client; return nullptr;
 }
 
 int main() {
-    signal(SIGINT, handleShutdownSignal);
-
-    const int serverPort = 8080;
+    signal(SIGINT, [](int){ serverRunning = false; close(myServerFd); });
     myServerFd = socket(AF_INET, SOCK_STREAM, 0);
-
-    int opt = 1;
-    setsockopt(myServerFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-
-    struct sockaddr_in serverConfig;
-    serverConfig.sin_family = AF_INET;
-    serverConfig.sin_addr.s_addr = INADDR_ANY;
-    serverConfig.sin_port = htons(serverPort);
-
-    if (bind(myServerFd, (struct sockaddr*)&serverConfig, sizeof(serverConfig)) < 0) {
-        logEvent("Failed to bind to port.", "ERROR");
-        return 1;
-    }
-    
+    int opt = 1; setsockopt(myServerFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    struct sockaddr_in cfg = {AF_INET, htons(8080), INADDR_ANY};
+    bind(myServerFd, (struct sockaddr*)&cfg, sizeof(cfg));
     listen(myServerFd, 10);
-    logEvent("Bayezid Secure Server started on port " + std::to_string(serverPort), "INFO");
-
+    logEvent("Bayezid Secure Server started on port 8080", "INFO");
     while (serverRunning) {
-        struct sockaddr_in clientConfig;
-        int configSize = sizeof(clientConfig);
-        
-        int activeClientConnection = accept(myServerFd, (struct sockaddr*)&clientConfig, (socklen_t*)&configSize);
-        
-        if (activeClientConnection < 0) {
-            if (!serverRunning) break;
-            continue;
-        }
-
-        ClientInfo* newClient = new ClientInfo;
-        newClient->socket = activeClientConnection;
-        newClient->address = clientConfig;
-
-        pthread_t clientThread;
-        if (pthread_create(&clientThread, NULL, handleClient, (void*)newClient) != 0) {
-            logEvent("Failed to create thread.", "ERROR");
-            close(activeClientConnection);
-            delete newClient;
-        }
+        struct sockaddr_in c_cfg; socklen_t len = sizeof(c_cfg);
+        int c_sock = accept(myServerFd, (struct sockaddr*)&c_cfg, &len);
+        if (c_sock < 0) break;
+        ClientInfo* n_c = new ClientInfo{c_sock, c_cfg};
+        pthread_t t; pthread_create(&t, NULL, handleClient, n_c);
     }
-
-    logEvent("Server shut down cleanly.", "INFO");
     return 0;
 }
