@@ -27,6 +27,6 @@ Before running the server, you must create a `users.txt` file in the same direct
 **Example `users.txt`:**
 (Note: The hash below is for the password `mo2needs2sleep`)
 ```text
-admin 744c8030bb4b791dc0c67efbc6e7cb359b3af3a8ed9c1488c036d0f5c1d1a63b Top
-ahmed 744c8030bb4b791dc0c67efbc6e7cb359b3af3a8ed9c1488c036d0f5c1d1a63b Medium
-guest 744c8030bb4b791dc0c67efbc6e7cb359b3af3a8ed9c1488c036d0f5c1d1a63b Entry
+admin 6e546e43a0d8ed97f3b341625667363d898de2a773c297c2726949c0449535f2 Top
+ahmed 6e546e43a0d8ed97f3b341625667363d898de2a773c297c2726949c0449535f2 Medium
+guest 6e546e43a0d8ed97f3b341625667363d898de2a773c297c2726949c0449535f2 Entry
