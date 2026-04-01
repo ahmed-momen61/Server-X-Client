@@ -4,181 +4,25 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <cstring>
-#include <string>
 #include <csignal>
-#include <fstream>
-#include <chrono>
 #include <atomic>
 #include <pthread.h>
-#include <sstream>
-#include <iomanip>
 #include <map>
 #include <mutex>
-#include <openssl/sha.h>
-#include <cstdio>
-#include <memory>
-#include <array>
-#include <vector>
+
+#include "Logger.h"
+#include "Security.h"
+#include "CommandHandler.h"
 
 std::atomic<bool> serverRunning(true);
 int myServerFd;
 
-std::mutex logMutex;
 std::mutex ipMutex;
 
 std::map<std::string, int> failedAttempts;
 std::map<std::string, std::chrono::time_point<std::chrono::system_clock>> blockedIPs;
 const int MAX_ATTEMPTS = 3;
 const int BLOCK_DURATION_MINUTES = 5;
-
-const auto logEvent = [](const std::string& message, const std::string& level = "INFO") {
-    std::lock_guard<std::mutex> lock(logMutex);
-    std::ofstream logFile("server.log", std::ios_base::app);
-    auto now = std::chrono::system_clock::now();
-    std::time_t now_time = std::chrono::system_clock::to_time_t(now);
-    std::string timeStr = std::ctime(&now_time);
-    timeStr.pop_back();
-    std::string logEntry = "[" + timeStr + "] [" + level + "] " + message;
-    
-    std::string color = "\033[0m"; 
-    if (level == "SUCCESS") color = "\033[32m"; 
-    else if (level == "WARNING") color = "\033[33m"; 
-    else if (level == "CRITICAL" || level == "ERROR") color = "\033[31m"; 
-
-    std::cout << color << logEntry << "\033[0m\n";
-    if (logFile.is_open()) logFile << logEntry << "\n";
-};
-
-const auto hashPassword = [](const std::string& password) -> std::string {
-    unsigned char hash[SHA256_DIGEST_LENGTH];
-    SHA256_CTX sha256;
-    SHA256_Init(&sha256);
-    SHA256_Update(&sha256, password.c_str(), password.length());
-    SHA256_Final(hash, &sha256);
-    
-    std::stringstream ss;
-    for(int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
-        ss << std::hex << std::setw(2) << std::setfill('0') << (int)hash[i];
-    }
-    return ss.str();
-};
-
-const auto authenticateUser = [](const std::string& username, const std::string& plainPassword, std::string& outRole) -> bool {
-    std::ifstream usersFile("users.txt");
-    if (!usersFile.is_open()) return false;
-
-    std::string hashedPassword = hashPassword(plainPassword);
-    std::string fileUser, fileHash, fileRole;
-
-    while (usersFile >> fileUser >> fileHash >> fileRole) {
-        if (fileUser == username && fileHash == hashedPassword) {
-            outRole = fileRole;
-            return true;
-        }
-    }
-    return false;
-};
-
-const auto execSysCommand = [](const std::string& cmd) -> std::string {
-    std::array<char, 128> buffer;
-    std::string result;
-    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd.c_str(), "r"), pclose);
-    if (!pipe) {
-        return "Error: Failed to execute system command.\n";
-    }
-    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
-        result += buffer.data();
-    }
-    return result.empty() ? "(No output)\n" : result;
-};
-
-const auto evaluateCommand = [](const std::string& cmd, const std::string& role, const std::string& clientIP) -> std::string {
-    if (cmd.find("passwords_backup.txt") != std::string::npos || cmd.find("admin_keys") != std::string::npos) {
-        logEvent("HONEYPOT TRIGGERED by IP: " + clientIP + ". Attempted to access restricted bait file.", "CRITICAL");
-        return "HONEYPOT_TRIGGER";
-    }
-
-    const std::vector<std::string> sysFiles = {
-        "Server.cpp", "Client.cpp", "server", "client", "users.txt", "server.log"
-    };
-
-    std::string targetFile = "";
-    size_t spacePos = cmd.find(" ");
-    if (spacePos != std::string::npos) {
-        targetFile = cmd.substr(spacePos + 1);
-    }
-
-    if (role != "Top" && !targetFile.empty()) {
-        for (const auto& sf : sysFiles) {
-            if (targetFile.find(sf) != std::string::npos) {
-                return "[-] Error: File not found or access denied.\n";
-            }
-        }
-    }
-
-    if (cmd.find("rm ") == 0 || cmd.find("delete ") == 0) {
-        if (role != "Top") return "Error: Delete permission denied. (Requires Top Level)\n";
-        
-        std::string filename = cmd.substr(cmd.find(" ") + 1);
-        if (std::remove(filename.c_str()) == 0) {
-            return "[+] File '" + filename + "' deleted successfully from server.\n";
-        } else {
-            return "[-] Error: Could not delete file. Maybe it doesn't exist?\n";
-        }
-    }
-    else if (cmd.find("cp ") == 0) {
-        if (role == "Entry") return "Error: Copy permission denied. (Requires Medium/Top Level)\n";
-        
-        size_t firstSpace = cmd.find(" ");
-        size_t secondSpace = cmd.find(" ", firstSpace + 1);
-        
-        if (secondSpace == std::string::npos) return "[-] Error: Invalid syntax. Use: cp source_file dest_file\n";
-        
-        std::string src = cmd.substr(firstSpace + 1, secondSpace - firstSpace - 1);
-        std::string dest = cmd.substr(secondSpace + 1);
-        
-        std::ifstream source(src, std::ios::binary);
-        std::ofstream destination(dest, std::ios::binary);
-        
-        if (!source) return "[-] Error: Source file not found.\n";
-        
-        destination << source.rdbuf();
-        return "[+] File copied successfully from " + src + " to " + dest + "\n";
-    }
-    else if (cmd.find("cat ") == 0) {
-        std::string filename = cmd.substr(cmd.find(" ") + 1);
-        std::ifstream file(filename);
-        
-        if (!file) return "[-] Error: File '" + filename + "' not found or access denied.\n";
-        
-        std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-        return "\n--- Content of " + filename + " ---\n" + content + "\n-------------------------\n";
-    }
-    else if (cmd == "ls") {
-        std::string rawOutput = execSysCommand("ls -la");
-        if (role == "Top") return rawOutput;
-
-        std::stringstream ss(rawOutput);
-        std::string line;
-        std::string filteredOutput = "";
-
-        while (std::getline(ss, line)) {
-            bool isHidden = false;
-            for (const auto& sf : sysFiles) {
-                if (line.find(sf) != std::string::npos) {
-                    isHidden = true;
-                    break;
-                }
-            }
-            if (!isHidden) {
-                filteredOutput += line + "\n";
-            }
-        }
-        return filteredOutput.empty() ? "(Empty Directory)\n" : filteredOutput;
-    }
-    
-    return "[-] Unknown or unsupported command.\n";
-};
 
 struct ClientInfo {
     int socket;
