@@ -23,10 +23,8 @@ void* receiverThread(void* arg) {
         int bytesReceived = read(sock, buffer, 8192);
         if (bytesReceived <= 0) break;
         
-        // فك تشفير الرسالة القادمة من السيرفر
         std::string msg = decryptAES(std::string(buffer));
         
-        // التحقق من نظام الفخاخ (Honeypot)
         if (msg.find("HONEYPOT_TRIGGER") != std::string::npos) {
             std::cout << RED << BOLD << "\n[!] SECURITY ALERT: Unauthorized access attempt detected. DISCONNECTING..." << RESET << std::endl;
             exit(0);
