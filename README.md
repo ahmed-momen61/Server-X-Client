@@ -5,8 +5,10 @@ This project implements a highly secure, multi-threaded TCP client-server commun
 
 ## Advanced Features
 * **Multi-threaded Architecture:** Utilizes `pthread` to handle multiple concurrent client connections without blocking the main server execution.
+* **Secure File Transfer (FTP Simulation):** Allows Top-level users to securely `upload` and `download` files. The system automatically manages isolated `uploads` and `downloads` directories, transmitting all file streams securely via AES-256 encryption.
+* **Virtual Directory Navigation:** Top-level users can navigate the server's file system using the `cd` command (restricted to safe directories like `uploads` and `downloads`) for organized file management.
 * **Cryptographic Authentication (SHA-256):** Passwords are no longer stored in plaintext. The server validates credentials against SHA-256 hashes using the OpenSSL library.
-* **Role-Based Access Control (RBAC):** Users are assigned specific access levels (Top, Medium, Entry) upon login, dynamically restricting their ability to execute commands (e.g., read, edit, delete).
+* **Role-Based Access Control (RBAC):** Users are assigned specific access levels (Top, Medium, Entry) upon login, dynamically restricting their ability to execute commands (e.g., read, edit, delete, upload/download).
 * **Audit Logging:** Comprehensive tracking of all server events, authentications, executed commands, and security alerts, stored persistently in `server.log`.
 * **Brute-Force Protection:** Automatically tracks failed login attempts and temporarily blocks the offending IP address after 3 consecutive failures.
 * **Active Defense (Honeypot):** Deploys simulated restricted files (e.g., `passwords_backup.txt`). Unauthorized access attempts immediately trigger a critical alert, log the event, and kick the attacker off the server.
@@ -15,11 +17,11 @@ This project implements a highly secure, multi-threaded TCP client-server commun
 
 ## Prerequisites
 * A Linux-based environment (e.g., Ubuntu, Kali Linux).
-* GCC Compiler (`g++`).
+* GCC Compiler (`g++`) with **C++17** support.
 * OpenSSL Development Libraries.
   * *To install on Debian/Ubuntu:* `sudo apt-get install libssl-dev`
-  * *To compile the all server files:* `g++ Server.cpp Logger.cpp Security.cpp CommandHandler.cpp -o server -lpthread -lssl -lcrypto`
-  * *To compile the client file:* `g++ Client.cpp -o client`
+  * *To compile the server executable:* `g++ -std=c++17 Server.cpp Logger.cpp Security.cpp CommandHandler.cpp -o server -lpthread -lssl -lcrypto`
+  * *To compile the client executable:* `g++ -std=c++17 Client.cpp Security.cpp -o client -lpthread -lssl -lcrypto`
 
 ## Initial Setup
 Before running the server, you must create a `users.txt` file in the same directory as the server executable. This file acts as your database. 
@@ -27,7 +29,7 @@ Before running the server, you must create a `users.txt` file in the same direct
 **Format:** `username hashedPassword role`
 
 **Example `users.txt`:**
-(Note: The hash below is for the password `mo2needs2sleep`)
+*(Note: The hash below is for the password `mo2needs2sleep`)*
 ```text
 admin 6e546e43a0d8ed97f3b341625667363d898de2a773c297c2726949c0449535f2 Top
 ahmed 6e546e43a0d8ed97f3b341625667363d898de2a773c297c2726949c0449535f2 Medium

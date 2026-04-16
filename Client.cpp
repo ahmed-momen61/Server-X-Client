@@ -5,6 +5,10 @@
 #include <cstring>
 #include <string>
 #include <pthread.h>
+#include <fstream>
+#include <sstream>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include "Security.h"
 
 const std::string RESET  = "\033[0m";
@@ -30,6 +34,29 @@ void* receiverThread(void* arg) {
             exit(0);
         }
 
+        if (msg.find("DOWNLOAD_READY:") == 0) {
+            size_t contentPos = msg.find("<CONTENT>");
+            std::string full_filename = msg.substr(15, contentPos - 15);
+            std::string content = msg.substr(contentPos + 9);
+            
+            std::string filename = full_filename;
+            size_t slashPos = full_filename.find_last_of('/');
+            if (slashPos != std::string::npos) {
+                filename = full_filename.substr(slashPos + 1);
+            }
+
+            mkdir("downloads", 0777);
+            
+            std::string filepath = "downloads/" + filename;
+            std::ofstream outfile(filepath, std::ios::binary);
+            outfile << content;
+            outfile.close();
+            
+            std::cout << GREEN << "\n[+] File downloaded successfully! Saved as: '" << filepath << "'" << RESET << "\n";
+            std::cout << CYAN << "Bayezid-Shell> " << RESET << std::flush;
+            continue;
+        }
+
         std::cout << "\r" << msg << "\n" << CYAN << "Bayezid-Shell> " << RESET << std::flush;
     }
     return nullptr;
@@ -41,9 +68,12 @@ void printGuide() {
     std::cout << CYAN << "===============================================================" << RESET << "\n";
     std::cout << GREEN << BOLD << " [File Operations] " << RESET << "\n";
     std::cout << "  ls                : List accessible files (RBAC Filtered)\n";
+    std::cout << "  cd <dir>          : Navigate folders (uploads/downloads/..) (Top Only)\n";
     std::cout << "  cat <file>        : Read file content\n";
     std::cout << "  cp <src> <dest>   : Copy files (Medium/Top Levels)\n";
     std::cout << "  rm <file>         : Delete files (Top Level Only)\n";
+    std::cout << "  download <file>   : Download file from server (FTP - Top Only)\n";
+    std::cout << "  upload <file>     : Upload local file to server (FTP - Top Only)\n";
     std::cout << "\n";
     std::cout << YELLOW << BOLD << " [Encrypted Chat System - AES 256] " << RESET << "\n";
     std::cout << "  chat_list         : Show all online employees\n";
@@ -115,6 +145,20 @@ int main() {
                 send(sock, encExit.c_str(), encExit.length(), 0);
                 std::cout << YELLOW << "Disconnecting safely..." << RESET << std::endl;
                 break;
+            }
+
+            if (cmd.find("upload ") == 0) {
+                std::string filename = cmd.substr(7);
+                std::ifstream infile(filename, std::ios::binary);
+                if (!infile) {
+                    std::cout << RED << "[-] Error: Local file '" << filename << "' not found." << RESET << "\n";
+                    continue; 
+                }
+                std::ostringstream ss;
+                ss << infile.rdbuf();
+                
+                cmd = "upload " + filename + " <CONTENT> " + ss.str();
+                std::cout << YELLOW << "[*] Uploading '" << filename << "' securely..." << RESET << "\n";
             }
 
             std::string encryptedCmd = encryptAES(cmd);
