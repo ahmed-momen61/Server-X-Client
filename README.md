@@ -1,4 +1,4 @@
-# Bayezid Secure Server (Server-X-Client Milestones 1-3)
+# Bayezid Secure Server (Server-X-Client) V0.1.3
 
 ## Overview
 This project implements a highly secure, multi-threaded TCP client-server communication system written in native C/C++ for Linux environments. Originally starting as a basic connection module, it has evolved into a robust architecture demonstrating advanced network programming, cryptography, Role-Based Access Control (RBAC), and active defense mechanisms against common cyber threats.
